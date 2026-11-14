@@ -1,4 +1,4 @@
-const CACHE = 'baac-pos-launcher-v1';
+const CACHE = 'baac-pos-launcher-v2';
 
 const FILES = [
   './',
