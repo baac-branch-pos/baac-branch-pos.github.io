@@ -1,0 +1,46 @@
+const CACHE = 'baac-pos-launcher-v1';
+
+const FILES = [
+  './',
+  './index.html',
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png',
+  './apple-touch-icon.png'
+];
+
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(CACHE).then(c => c.addAll(FILES))
+  );
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys().then(keys => Promise.all(
+      keys.filter(k =>
+        k.startsWith('baac-pos-launcher-') && k !== CACHE
+      ).map(k => caches.delete(k))
+    )).then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', e => {
+  if (
+    e.request.method !== 'GET' ||
+    new URL(e.request.url).origin !== self.location.origin
+  ) return;
+
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      fetch(e.request).catch(() =>
+        caches.match('./index.html')
+      )
+    );
+    return;
+  }
+
+  e.respondWith(
+    caches.match(e.request).then(r => r || fetch(e.request))
+  );
+});
