@@ -860,7 +860,7 @@ const CLIENT_ID='392222493837-ld17jjj2r3afr23ehr8hmvaibgtc7e92.apps.googleuserco
 const API_SCOPE='https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email';
 let apiToken='', apiExpiry=0, apiEmail='';
 const apiFunctions=new Set(['registerBranch','openBranch','listShop','saveAction','receiptHistory','summaryDashboard','setProfitTarget','billDays','dailyBills','billProof','cancelBranchBill']);
-function requestGoogle(expected){
+function requestGoogle(expected, returning=false){
  return new Promise((resolve,reject)=>{
   if(!window.google?.accounts?.oauth2){reject(Error('Google ยังโหลดไม่เสร็จ กรุณากดเข้าใช้งานอีกครั้ง'));return;}
   const client=google.accounts.oauth2.initTokenClient({client_id:CLIENT_ID,scope:API_SCOPE,include_granted_scopes:true,login_hint:expected,callback:async response=>{
@@ -875,7 +875,7 @@ function requestGoogle(expected){
     el('reauthGoogle').hidden=true;resolve();
    }catch(e){reject(e)}
   },error_callback:e=>reject(Error(e.type==='popup_closed'?'ปิดหน้าต่าง Google ก่อนเข้าสู่ระบบสำเร็จ':'เปิดหน้าต่าง Google ไม่ได้ กรุณาอนุญาตป๊อปอัป'))});
-  client.requestAccessToken({prompt:'select_account'});
+  client.requestAccessToken({prompt:returning?'':'select_account'});
  });
 }
 async function call(name,...args){
@@ -898,13 +898,17 @@ function enterBranch(data){
  el('branchUser').hidden=false;el('recovery').replaceChildren();msg('');draw();syncPending()
 }
 const signedOutKey='baac.pos.signedOut';
+const rememberedBranchKey='baac.pos.rememberedBranch';
+function rememberedBranch(){try{if(localStorage.getItem(signedOutKey))return null;const x=JSON.parse(localStorage.getItem(rememberedBranchKey)||'null');return x&&typeof x.email==='string'&&typeof x.name==='string'?x:null;}catch(_){return null;}}
+function rememberBranch(data){try{localStorage.setItem(rememberedBranchKey,JSON.stringify({email:String(data.account).toLowerCase(),name:String(data.branch)}));}catch(_){}}
+function forgetBranch(){try{localStorage.removeItem(rememberedBranchKey);}catch(_){}}
 function showBranchLogin(){
  clearTimeout(retryTimer);
  shop=null;tab=-1;payment=false;cart.clear();saleCategory='ทั้งหมด';revision++;
  for(const id of ['branchUser','logout','home','bar'])el(id).hidden=true;
  el('branchLabel').textContent='';
  el('page').replaceChildren();el('page').inert=false;el('recovery').replaceChildren();
- el('branchForm').reset();el('branchLogin').hidden=false;msg('');el('branchEmail').focus()
+ el('branchForm').reset();el('branchForm').querySelector('button[type=submit]').textContent='เข้าใช้งาน';el('branchLogin').hidden=false;msg('');el('branchEmail').focus()
 }
 el('logout').onclick=()=>{
  if(!shop)return;
@@ -915,12 +919,13 @@ el('logout').onclick=()=>{
  btn(actions,'ยกเลิก',()=>d.close());
  btn(actions,'ออกจากระบบ',()=>{
   if(busy||queued().length){d.close();msg('กรุณารอให้ซิงก์เสร็จก่อนออกจากระบบ');return}
-  localStorage.setItem(signedOutKey,'1');apiToken='';apiEmail='';apiExpiry=0;el('reauthGoogle').hidden=true;d.close();showBranchLogin()
+  localStorage.setItem(signedOutKey,'1');forgetBranch();apiToken='';apiEmail='';apiExpiry=0;el('reauthGoogle').hidden=true;d.close();showBranchLogin()
  },true)
 };
 let checkingConsent=false;
 function showLoginForm(){el('branchLogin').hidden=false;}
-async function load(){if(!shop)showLoginForm();}
+async function load(){if(shop)return;showLoginForm();const last=rememberedBranch();if(last){el('branchEmail').value=last.email;el('branchName').value=last.name;el('branchForm').querySelector('button[type=submit]').textContent='เข้าใช้งานต่อ';}}
+for(const id of ['branchEmail','branchName'])el(id).addEventListener('input',()=>{const last=rememberedBranch();el('branchForm').querySelector('button[type=submit]').textContent=last&&el('branchEmail').value.trim().toLowerCase()===last.email&&el('branchName').value.trim()===last.name?'เข้าใช้งานต่อ':'เข้าใช้งาน';});
 el('branchForm').onsubmit=async e=>{
  e.preventDefault();if(checkingConsent)return;
  const email=el('branchEmail').value.trim().toLowerCase(),name=el('branchName').value.trim();
@@ -928,19 +933,20 @@ el('branchForm').onsubmit=async e=>{
  checkingConsent=true;msg('กำลังเชื่อมต่อ Google…');
  const submit=el('branchForm').querySelector('button[type=submit]');submit.disabled=true;
  try{
-  await requestGoogle(email);
+  const last=rememberedBranch();
+  await requestGoogle(email,!!last&&last.email===email&&last.name===name);
   const existing=await call('openBranch');
   if(existing&&String(existing.branch).trim()!==name)throw Error('บัญชีนี้ลงทะเบียนสาขา '+existing.branch+' ไว้แล้ว');
   const data=existing||await call('registerBranch',name,email);
   if(!data||String(data.account).toLowerCase()!==email)throw Error('บัญชีที่ API ส่งกลับไม่ตรงกับบัญชีที่เลือก');
-  localStorage.removeItem(signedOutKey);enterBranch(data);
+  localStorage.removeItem(signedOutKey);rememberBranch(data);enterBranch(data);
  }catch(err){apiToken='';apiEmail='';msg('เข้าสู่ระบบไม่สำเร็จ • '+(err.message||err));}
  finally{checkingConsent=false;submit.disabled=false;}
 };
 el('reauthGoogle').onclick=async()=>{
  if(!shop||checkingConsent)return;
  checkingConsent=true;const expected=String(shop.account).toLowerCase();
- try{await requestGoogle(expected);syncPending();msg('เชื่อมต่อ Google แล้ว');}catch(e){msg(e.message||e)}finally{checkingConsent=false;}
+ try{await requestGoogle(expected,true);syncPending();msg('เชื่อมต่อ Google แล้ว');}catch(e){msg(e.message||e)}finally{checkingConsent=false;}
 };
 let retryTimer, retryDelay=1500;
 const waitingForms=new Map();
