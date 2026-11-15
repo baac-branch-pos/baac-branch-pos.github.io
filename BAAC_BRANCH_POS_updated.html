@@ -859,6 +859,17 @@ const API_URL='https://script.googleapis.com/v1/scripts/AKfycbyoAa6II2t9iGUnJtZ8
 const CLIENT_ID='392222493837-ld17jjj2r3afr23ehr8hmvaibgtc7e92.apps.googleusercontent.com';
 const API_SCOPE='https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email';
 let apiToken='', apiExpiry=0, apiEmail='';
+const sessionKey='baac.pos.googleSession.v1';
+function clearGoogleSession(){try{sessionStorage.removeItem(sessionKey)}catch(_){}}
+function saveGoogleSession(){try{sessionStorage.setItem(sessionKey,JSON.stringify({token:apiToken,expiry:apiExpiry,email:apiEmail}))}catch(_){}}
+async function restoreGoogleSession(expected){
+ let x;try{x=JSON.parse(sessionStorage.getItem(sessionKey)||'null')}catch(_){return false}
+ if(!x||typeof x.token!=='string'||!Number.isFinite(x.expiry)||x.expiry<=Date.now()||x.email!==expected){clearGoogleSession();return false}
+ const r=await fetch('https://www.googleapis.com/oauth2/v3/userinfo',{headers:{Authorization:'Bearer '+x.token},cache:'no-store'});
+ if(!r.ok){if(r.status===401||r.status===403)clearGoogleSession();return false}
+ const identity=await r.json();if(!identity.email_verified||String(identity.email).toLowerCase()!==expected){clearGoogleSession();return false}
+ apiToken=x.token;apiExpiry=x.expiry;apiEmail=expected;return true;
+}
 const apiFunctions=new Set(['registerBranch','openBranch','listShop','saveAction','receiptHistory','summaryDashboard','setProfitTarget','billDays','dailyBills','billProof','cancelBranchBill']);
 function requestGoogle(expected, returning=false){
  return new Promise((resolve,reject)=>{
@@ -872,7 +883,7 @@ function requestGoogle(expected, returning=false){
     const identity=await r.json();
     if(!identity.email_verified||String(identity.email).toLowerCase()!==expected.toLowerCase())throw Error('E-Mail ไม่ตรงกับบัญชี Google ที่เลือก กรุณาเลือกบัญชีเดิม');
     apiEmail=String(identity.email).toLowerCase();apiToken=response.access_token;apiExpiry=Date.now()+Number(response.expires_in||3600)*1000-30000;
-    el('reauthGoogle').hidden=true;resolve();
+    el('reauthGoogle').hidden=true;saveGoogleSession();resolve();
    }catch(e){reject(e)}
   },error_callback:e=>reject(Error(e.type==='popup_closed'?'ปิดหน้าต่าง Google ก่อนเข้าสู่ระบบสำเร็จ':'เปิดหน้าต่าง Google ไม่ได้ กรุณาอนุญาตป๊อปอัป'))});
   client.requestAccessToken({prompt:returning?'':'select_account'});
@@ -884,7 +895,7 @@ async function call(name,...args){
  if(shop&&String(shop.account).toLowerCase()!==apiEmail)throw Error('บัญชี Google เปลี่ยน กรุณาเข้าสู่ระบบใหม่');
  const r=await fetch(API_URL,{method:'POST',headers:{Authorization:'Bearer '+apiToken,'Content-Type':'application/json'},body:JSON.stringify({function:name,parameters:args,devMode:false}),cache:'no-store'});
  const data=await r.json();
- if(r.status===401){apiToken='';if(shop)el('reauthGoogle').hidden=false;throw Error('สิทธิ์ Google หมดอายุ กรุณาเชื่อมต่อใหม่');}
+ if(r.status===401){clearGoogleSession();apiToken='';if(shop)el('reauthGoogle').hidden=false;throw Error('สิทธิ์ Google หมดอายุ กรุณาเชื่อมต่อใหม่');}
  if(!r.ok||data.error){const d=data.error;throw Error(d?.details?.find(x=>x.errorMessage)?.errorMessage||d?.message||('API HTTP '+r.status));}
  if(!data.done)throw Error('API ยังไม่ยืนยันผลการบันทึก');
  return data.response?.result??null;
@@ -919,12 +930,26 @@ el('logout').onclick=()=>{
  btn(actions,'ยกเลิก',()=>d.close());
  btn(actions,'ออกจากระบบ',()=>{
   if(busy||queued().length){d.close();msg('กรุณารอให้ซิงก์เสร็จก่อนออกจากระบบ');return}
-  localStorage.setItem(signedOutKey,'1');forgetBranch();apiToken='';apiEmail='';apiExpiry=0;el('reauthGoogle').hidden=true;d.close();showBranchLogin()
+  localStorage.setItem(signedOutKey,'1');forgetBranch();clearGoogleSession();apiToken='';apiEmail='';apiExpiry=0;el('reauthGoogle').hidden=true;d.close();showBranchLogin()
  },true)
 };
 let checkingConsent=false;
 function showLoginForm(){el('branchLogin').hidden=false;}
-async function load(){if(shop)return;showLoginForm();const last=rememberedBranch();if(last){el('branchEmail').value=last.email;el('branchName').value=last.name;el('branchForm').querySelector('button[type=submit]').textContent='เข้าใช้งานต่อ';}}
+async function load(){
+ if(shop)return;const last=rememberedBranch();
+ if(last){
+  checkingConsent=true;msg('กำลังคืนสถานะการเข้าสู่ระบบ…');
+  try{
+   if(await restoreGoogleSession(last.email)){
+    const data=await call('openBranch');
+    if(data&&String(data.account).toLowerCase()===last.email&&String(data.branch).trim()===last.name){enterBranch(data);return;}
+   }
+  }catch(_){}finally{checkingConsent=false;}
+  apiToken='';apiEmail='';apiExpiry=0;
+  el('branchEmail').value=last.email;el('branchName').value=last.name;el('branchForm').querySelector('button[type=submit]').textContent='เข้าใช้งานต่อ';
+ }else{clearGoogleSession();}
+ msg('');showLoginForm();
+}
 for(const id of ['branchEmail','branchName'])el(id).addEventListener('input',()=>{const last=rememberedBranch();el('branchForm').querySelector('button[type=submit]').textContent=last&&el('branchEmail').value.trim().toLowerCase()===last.email&&el('branchName').value.trim()===last.name?'เข้าใช้งานต่อ':'เข้าใช้งาน';});
 el('branchForm').onsubmit=async e=>{
  e.preventDefault();if(checkingConsent)return;
@@ -940,7 +965,7 @@ el('branchForm').onsubmit=async e=>{
   const data=existing||await call('registerBranch',name,email);
   if(!data||String(data.account).toLowerCase()!==email)throw Error('บัญชีที่ API ส่งกลับไม่ตรงกับบัญชีที่เลือก');
   localStorage.removeItem(signedOutKey);rememberBranch(data);enterBranch(data);
- }catch(err){apiToken='';apiEmail='';msg('เข้าสู่ระบบไม่สำเร็จ • '+(err.message||err));}
+ }catch(err){clearGoogleSession();apiToken='';apiEmail='';msg('เข้าสู่ระบบไม่สำเร็จ • '+(err.message||err));}
  finally{checkingConsent=false;submit.disabled=false;}
 };
 el('reauthGoogle').onclick=async()=>{
